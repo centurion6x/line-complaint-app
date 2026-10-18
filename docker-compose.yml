@@ -1,0 +1,18 @@
+# Local/reference compose file. On Coolify you will typically point its
+# "Dockerfile" build pack at this repo instead of using compose directly —
+# see DEPLOYMENT.md — but this is useful for testing the full image
+# locally first.
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VITE_LIFF_ID: ${VITE_LIFF_ID}
+    ports:
+      - "8080:8080"
+    environment:
+      LINE_CHANNEL_ID: ${LINE_CHANNEL_ID}
+      LINE_CHANNEL_ACCESS_TOKEN: ${LINE_CHANNEL_ACCESS_TOKEN}
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
+    restart: unless-stopped
