@@ -79,7 +79,7 @@ func (s *Server) handleCreateComplaint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	imageURLs, errResp := s.cachePhotos(files)
+	photos, errResp := s.cachePhotos(files)
 	if errResp != "" {
 		writeJSON(w, http.StatusBadRequest, complaintResponse{Error: errResp})
 		return
@@ -87,11 +87,9 @@ func (s *Server) handleCreateComplaint(w http.ResponseWriter, r *http.Request) {
 
 	ticketID := shortTicketID()
 
-	msgs := []message{flexAck(ticketID, title, description, len(imageURLs))}
-	for _, u := range imageURLs {
-		// The Messaging API requires both an original and a preview URL;
-		// we point both at the same cached copy to keep this simple.
-		msgs = append(msgs, imageMessage(u, u))
+	msgs := []message{flexAck(ticketID, title, description, len(photos))}
+	for _, p := range photos {
+		msgs = append(msgs, imageMessage(p.OriginalURL, p.PreviewURL))
 	}
 
 	if err := s.line.Push(userID, msgs); err != nil {
@@ -103,8 +101,18 @@ func (s *Server) handleCreateComplaint(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, complaintResponse{OK: true, TicketID: ticketID})
 }
 
-func (s *Server) cachePhotos(files []*multipart.FileHeader) ([]string, string) {
-	var imageURLs []string
+// cachedPhoto holds the two URLs LINE's image message needs: the
+// full-size original (shown when the user taps the image) and a small
+// preview (shown directly in the chat bubble). LINE requires the
+// preview to be well under 1MB, so it is never just the original image
+// URL reused — see preview.go.
+type cachedPhoto struct {
+	OriginalURL string
+	PreviewURL  string
+}
+
+func (s *Server) cachePhotos(files []*multipart.FileHeader) ([]cachedPhoto, string) {
+	var photos []cachedPhoto
 	for _, fh := range files {
 		if fh.Size > s.cfg.MaxUploadMB*1024*1024 {
 			return nil, fmt.Sprintf("each photo must be under %dMB", s.cfg.MaxUploadMB)
@@ -131,10 +139,24 @@ func (s *Server) cachePhotos(files []*multipart.FileHeader) ([]string, string) {
 		if contentType == "image/png" {
 			ext = "png"
 		}
-		id := s.images.Put(data, contentType)
-		imageURLs = append(imageURLs, fmt.Sprintf("%s/images/%s.%s", s.cfg.PublicBaseURL, id, ext))
+		originalID := s.images.Put(data, contentType)
+		originalURL := fmt.Sprintf("%s/images/%s.%s", s.cfg.PublicBaseURL, originalID, ext)
+
+		// Fall back to reusing the original URL only if preview
+		// generation itself fails (e.g. a corrupt upload that still
+		// passed the content-type sniff) — better a slow/oversized
+		// preview than none at all.
+		previewURL := originalURL
+		if previewData, perr := makePreview(data); perr != nil {
+			log.Printf("preview generation failed, falling back to original image: %v", perr)
+		} else {
+			previewID := s.images.Put(previewData, "image/jpeg")
+			previewURL = fmt.Sprintf("%s/images/%s.jpg", s.cfg.PublicBaseURL, previewID)
+		}
+
+		photos = append(photos, cachedPhoto{OriginalURL: originalURL, PreviewURL: previewURL})
 	}
-	return imageURLs, ""
+	return photos, ""
 }
 
 func (s *Server) handleGetImage(w http.ResponseWriter, r *http.Request) {
