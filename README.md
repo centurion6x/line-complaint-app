@@ -26,7 +26,9 @@ Dockerfile   Multi-stage build: frontend -> backend -> single runtime image
    and POSTs `multipart/form-data` (title, description, photos,
    idToken) to `POST /api/complaints`.
 4. The backend verifies the ID token against LINE's `/oauth2/v2.1/verify`
-   endpoint to recover the caller's LINE user ID, caches the photos
+   endpoint (checked against the LIFF app's own LINE Login channel —
+   see DEPLOYMENT.md, LIFF can't live on a Messaging API channel
+   anymore) to recover the caller's LINE user ID, caches the photos
    in memory (not on disk, not in a database — see DEPLOYMENT.md for
    why that's a deliberate limitation), and pushes a Flex Message +
    image messages to that user via the Messaging API push endpoint.

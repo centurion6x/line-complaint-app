@@ -11,8 +11,8 @@ import (
 // short-lived in-memory image cache (see store.go).
 type Config struct {
 	Port             string
-	LineChannelID    string // the LIFF channel's Channel ID — used as the expected "aud" on ID tokens
-	LineChannelToken string // channel access token used to call the Messaging API push endpoint
+	LineChannelID    string // the LINE Login/MINI App channel's Channel ID (the LIFF app lives here) — used as the expected "aud" on ID tokens. Deliberately NOT the same channel as LineChannelToken below — see DEPLOYMENT.md.
+	LineChannelToken string // channel access token for the separate Messaging API channel, used to call the push endpoint
 	PublicBaseURL    string // e.g. https://complaints.example.com (no trailing slash) — must be the publicly reachable HTTPS origin of THIS service
 	MaxUploadMB      int64
 	MaxPhotos        int

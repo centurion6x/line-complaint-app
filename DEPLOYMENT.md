@@ -15,7 +15,7 @@ Console setup and Coolify setup all depend on each other.
 | Variable | Scope | Where it's used | Notes |
 |---|---|---|---|
 | `VITE_LIFF_ID` | **Build-time** (frontend) | Baked into the JS bundle by Vite when the image is built | Must be passed as a Docker `--build-arg` / Coolify "Build Variable" — setting it as a normal runtime env var has **no effect**, since the frontend is already compiled by the time the container starts. |
-| `LINE_CHANNEL_ID` | Runtime (backend) | Expected `aud` when verifying LIFF ID tokens | Same channel as the LIFF app and Messaging API channel. Not secret, but keep consistent with the Console. |
+| `LINE_CHANNEL_ID` | Runtime (backend) | Expected `aud` when verifying LIFF ID tokens | This is the **LINE Login (or LINE MINI App) channel's** Channel ID — the channel the LIFF app itself is attached to. It is **not** the Messaging API channel ID (see below). Not secret, but keep consistent with the Console. |
 | `LINE_CHANNEL_ACCESS_TOKEN` | Runtime (backend) | Bearer token for the Messaging API push endpoint | **Secret.** Treat like a password — store it as a Coolify secret, never commit it, rotate it if it leaks. |
 | `PUBLIC_BASE_URL` | Runtime (backend) | Builds the public HTTPS image URLs that LINE's servers fetch for image messages | Must be the real public HTTPS origin the app is reachable at once deployed (no trailing slash). Must start with `https://` — the server refuses to start otherwise. |
 | `PORT` | Runtime (backend) | Port the Go server listens on | Defaults to `8080`; usually left alone on Coolify, which proxies to it. |
@@ -23,29 +23,53 @@ Console setup and Coolify setup all depend on each other.
 No other secrets are required — there is no database, no session store,
 no third-party auth provider.
 
+> **Important: you need two channels, not one.** LINE no longer allows
+> LIFF apps to be added to a Messaging API channel directly — LIFF must
+> be hosted on a **LINE Login** (or **LINE MINI App**) channel instead
+> ([LINE's announcement](https://developers.line.biz/en/news/2019/11/11/liff-cannot-be-used-with-messaging-api-channels/)).
+> This still works for this app's design: as long as both channels sit
+> under the **same Provider**, LINE issues the same user ID (`sub`) for
+> a given person across every channel under that Provider. So the
+> backend's ID-token verification (against the Login channel) and its
+> push call (via the Messaging API channel) resolve to the same user —
+> there's just no single channel that does both anymore.
+
 ## LINE Developers Console setup
 
 1. In the [LINE Developers Console](https://developers.line.biz/console/),
-   create (or reuse) a **Provider**, then create a **Messaging API**
-   channel under it.
-2. On the channel's **Messaging API** tab, issue a long-lived
-   **Channel access token** — this is your `LINE_CHANNEL_ACCESS_TOKEN`.
-3. Note the **Channel ID** shown on the **Basic settings** tab — this is
-   your `LINE_CHANNEL_ID`.
-4. Still under the same channel, open the **LIFF** tab and add a LIFF
-   app: set its **Endpoint URL** to your deployed app's URL (you'll come
-   back and update this once you know your real domain), and its **Size**
-   to `Full` for the best form-filling experience. Note the generated
-   **LIFF ID** — this is your `VITE_LIFF_ID`.
-5. Under **Messaging API** settings, disable auto-reply/greeting
-   messages you don't want interfering with the flow, and make sure
-   **Allow bot to join group chats** / webhook settings are whatever
-   fits your use case (this app doesn't use webhooks at all — it only
-   pushes messages out).
-6. Add a **Rich Menu** (under the Messaging API tab or via the Rich
-   Menu API) with a tap area that opens your LIFF app's URL
-   (`https://liff.line.me/<your-liff-id>`) — this is the "block UI
-   element" entry point into the complaint form.
+   create (or reuse) a **Provider** — note its name, you'll put both
+   channels under it.
+2. Under that Provider, create a **Messaging API** channel (this is your
+   Official Account / bot). On its **Messaging API** tab, issue a
+   long-lived **Channel access token** — this is your
+   `LINE_CHANNEL_ACCESS_TOKEN`.
+3. Under the **same Provider**, create a second channel: a **LINE Login**
+   channel (choose app type "Web app"), or a **LINE MINI App** channel if
+   you'd rather follow LINE's newer recommended path for LIFF. This
+   second channel is what will host the LIFF app itself — channel names
+   can't contain "LINE" or similar strings.
+4. On that Login/MINI App channel, note its **Channel ID** from **Basic
+   settings** — this is your `LINE_CHANNEL_ID` (used only to verify ID
+   tokens; it has nothing to do with the push call).
+5. Still on that same Login/MINI App channel, open the **LIFF** tab and
+   add a LIFF app: set its **Endpoint URL** to your deployed app's URL
+   (you'll come back and update this once you know your real domain),
+   and its **Size** to `Full` for the best form-filling experience. Note
+   the generated **LIFF ID** — this is your `VITE_LIFF_ID`.
+6. Back on the Messaging API channel, disable auto-reply/greeting
+   messages you don't want interfering with the flow (this app doesn't
+   use webhooks at all — it only pushes messages out, so webhook
+   settings can stay off).
+7. Add a **Rich Menu** to the Messaging API channel (under its Messaging
+   API tab, or via the Rich Menu API) with a tap area that opens your
+   LIFF app's URL (`https://liff.line.me/<your-liff-id>`) — this is the
+   "block UI element" entry point into the complaint form.
+8. Have the account you'll test with **add the Messaging API channel's
+   Official Account as a friend** (scan its QR code from the Messaging
+   API tab, or use its OA link). LINE's push API can only deliver to
+   users who have added the OA as a friend — the complaint form will
+   still submit successfully for anyone, but the acknowledgement push
+   will silently fail to reach a non-friend.
 
 ## Deploying on Coolify
 
@@ -102,6 +126,17 @@ no third-party auth provider.
   themselves" (their real LINE user ID, verified via the ID token) —
   there's no additional login, and no admin view. This matches the "no
   auth for now" requirement, but means anyone with the link can use it.
+- **The user must have added the Official Account as a friend.** This
+  is a LINE platform rule, not something this app enforces: the push
+  endpoint can only deliver messages to users who've added the OA. If
+  they haven't, `handleCreateComplaint` already surfaces this as a
+  failed submission — the push call errors, the backend logs it, and
+  the browser gets back a 502 with "your complaint was captured but the
+  chat acknowledgement failed to send." The photos the user uploaded
+  are still cached in memory at that point but nothing will ever
+  consume them, so make sure your LIFF Endpoint URL instructions (or
+  the Rich Menu tap area's surrounding text) tell first-time users to
+  add the OA as a friend before opening the form.
 - **Rate limits.** The Messaging API push endpoint has its own rate
   limits per channel; this app does not implement any throttling of its
   own on top of that.
